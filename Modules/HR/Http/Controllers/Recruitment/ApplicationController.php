@@ -21,6 +21,7 @@ use Modules\HR\Http\Requests\Recruitment\ApplicationRequest;
 use Modules\HR\Http\Requests\Recruitment\CustomApplicationMailRequest;
 use Modules\HR\Services\ApplicationService;
 use Modules\User\Entities\User;
+use  Modules\HR\Http\Requests\TeamInteractionRequest;
 
 abstract class ApplicationController extends Controller
 {
@@ -59,6 +60,9 @@ abstract class ApplicationController extends Controller
             'status' =>request()->get('status') ?: 'non-rejected',
             'job-type' => $this->getApplicationType(),
             'job' => request()->get('hr_job_id'),
+            'university' => request()->get('hr_university_id'),
+            'graduation_year' => request()->get('end-year'),
+            // 'sortby' => request()->get('sort_by'), Commenting, as we need to brainstorm on this feature a bit
             'search' => request()->get('search'),
             'tags' => request()->get('tags'),
             'assignee' => request()->get('assignee'), // TODO
@@ -68,9 +72,9 @@ abstract class ApplicationController extends Controller
         $applications = Application::join('hr_application_round', function ($join) {
             $join->on('hr_application_round.hr_application_id', '=', 'hr_applications.id')
                 ->where('hr_application_round.is_latest', true);
-        })
-            ->with(['applicant', 'job', 'tags', 'latestApplicationRound'])
-            ->whereHas('latestApplicationRound')
+        })->with(['applicant', 'job', 'tags', 'latestApplicationRound']);
+
+        $applications = $applications->whereHas('latestApplicationRound')
             ->applyFilter($filters)
             ->orderByRaw("FIELD(hr_application_round.scheduled_person_id, {$loggedInUserId} ) DESC")
             ->orderByRaw('ISNULL(hr_application_round.scheduled_date) ASC')
@@ -84,8 +88,9 @@ abstract class ApplicationController extends Controller
             'applications' => $applications,
             'status' => request()->get('status'),
         ];
-        $hrRounds = ['Resume Screening', 'Introductory Call', 'Basic Technical Round', 'Detailed Technical Round', 'Team Interaction Round', 'HR Round', 'Trial Program', 'Volunteer Screening'];
+        $hrRounds = ['Resume Screening', 'Telephonic Interview', 'Introductory Call', 'Basic Technical Round', 'Detailed Technical Round', 'Team Interaction Round', 'HR Round', 'Trial Program', 'Volunteer Screening'];
         $strings = array_pluck(config('constants.hr.status'), 'label');
+        $hrRoundsCounts = [];
 
         foreach ($strings as $string) {
             $attr[camel_case($string) . 'ApplicationsCount'] = Application::applyFilter($countFilters)
@@ -96,7 +101,14 @@ abstract class ApplicationController extends Controller
                 ->count();
         }
 
+        $jobType = $this->getApplicationType();
+
         foreach ($hrRounds as $round) {
+            $applicationCount = Application::query()->filterByJobType($jobType)
+            ->whereIn('hr_applications.status', ['in-progress', 'new', 'trial-program'])
+            ->FilterByRoundName($round)
+            ->count();
+            $hrRoundsCounts[$round] = $applicationCount;
             $attr[camel_case($round) . 'Count'] = Application::applyFilter($countFilters)
             ->where('status', config('constants.hr.status.in-progress.label'))
             ->whereHas('latestApplicationRound', function ($subQuery) use ($round) {
@@ -107,11 +119,20 @@ abstract class ApplicationController extends Controller
             })
             ->count();
         }
+
         $attr['jobs'] = Job::all();
+        $attr['universities'] = University::all();
         $attr['tags'] = Tag::orderBy('name')->get();
+        $attr['rounds'] = $hrRoundsCounts;
         $attr['assignees'] = User::whereHas('roles', function ($query) {
             $query->whereIn('name', ['super-admin', 'admin', 'hr-manager']);
         })->orderby('name', 'asc')->get();
+
+        $attr['openApplicationsCountForJobs'] = [];
+        foreach ($applications->items() as $application) {
+            $openApplicationCountForJob = Application::where('hr_job_id', $application->hr_job_id)->isOpen()->count();
+            $attr['openApplicationsCountForJobs'][$application->job->title] = $openApplicationCountForJob;
+        }
 
         return view('hr.application.index')->with($attr);
     }
@@ -123,9 +144,17 @@ abstract class ApplicationController extends Controller
      */
     public function edit($id)
     {
+
+        //TODO: We need to refactor the edit code and write it in the service
         $application = Application::findOrFail($id);
 
-        // phew!
+        if ($application->latestApplicationRound->hr_round_id == 1) {
+            $application->latestApplicationRound->scheduled_date = today()->toDateString();
+            $application->latestApplicationRound->scheduled_end = today()->toDateString();
+            $application->latestApplicationRound->scheduled_person_id = auth()->id();
+            $application->latestApplicationRound->save();
+        }
+
         $application->load(['evaluations', 'evaluations.evaluationParameter', 'evaluations.evaluationOption', 'job', 'job.rounds', 'job.rounds.evaluationParameters', 'job.rounds.evaluationParameters.options', 'applicant', 'applicant.applications', 'applicationRounds', 'applicationRounds.evaluations', 'applicationRounds.round', 'applicationMeta', 'applicationRounds.followUps', 'tags']);
         $job = $application->job;
         $approveMailTemplate = Setting::getApplicationApprovedEmail();
@@ -153,6 +182,21 @@ abstract class ApplicationController extends Controller
         }
 
         return view('hr.application.edit')->with($attr);
+    }
+
+    public function generateTeamInteractionEmail(TeamInteractionRequest $request)
+    {
+        $subject = Setting::where('module', 'hr')->where('setting_key', 'hr_team_interaction_round_subject')->first();
+        $body = Setting::where('module', 'hr')->where('setting_key', 'hr_team_interaction_round_body')->first();
+        $body->setting_value = str_replace('|*OFFICE LOCATION*|', $request->location, $body->setting_value);
+        $body->setting_value = str_replace('|*DATE SELECTED*|', date('d M Y', strtotime($request->date)), $body->setting_value);
+        $body->setting_value = str_replace('|*TIME RANGE*|', date('h:i a', strtotime($request->start_time)) . ' - ' . date('h:i a', strtotime($request->end_time)), $body->setting_value);
+        $body->setting_value = str_replace('|*APPLICANT NAME*|', $request->applicant_name, $body->setting_value);
+
+        return response()->json([
+            'subject'=> $subject->setting_value,
+            'body' => $body->setting_value,
+        ]);
     }
 
     public static function getOfferLetter(Application $application, Request $request)

@@ -36,13 +36,15 @@ class Applicant extends Model
             'linkedin' => isset($attr['linkedin']) ? $attr['linkedin'] : null,
         ]);
 
-        $job = Job::where('title', $attr['job_title'])->first();
+        $jobId = $attr['hr_job_id'] ?? Job::where('opportunity_id', $attr['opportunity_id'])->first()->id;
+        $hr_channel_id = ($attr['hr_channel_id']) ?? HrChannel::select('id')->where('name', 'Website')->first()->id;
         $application = Application::_create([
-            'hr_job_id' => $job->id,
+            'hr_job_id' => $jobId,
             'hr_applicant_id' => $applicant->id,
             'resume' => $attr['resume'] ?? '',
             'resume_file' => $attr['resume_file'] ?? '',
             'status' => $applicant->wasRecentlyCreated ? config('constants.hr.status.new.label') : config('constants.hr.status.on-hold.label'),
+            'hr_channel_id' => $hr_channel_id,
         ]);
 
         if (isset($attr['form_data'])) {
@@ -137,5 +139,14 @@ class Applicant extends Model
     public function university()
     {
         return $this->hasOne(University::class, 'id', 'hr_university_id');
+    }
+
+    public function getLinkedinAttribute($value)
+    {
+        if (strpos($value, 'http') !== 0) {
+            return 'https://' . $value;
+        }
+
+        return $value;
     }
 }

@@ -64,7 +64,7 @@ return [
     |
     */
 
-    'timezone' => env('APP_TIMEZONE', 'UTC'),
+    'timezone' => env('APP_TIMEZONE', 'Asia/Kolkata'),
 
     /*
     |--------------------------------------------------------------------------
@@ -162,6 +162,8 @@ return [
         Spatie\Permission\PermissionServiceProvider::class,
         App\Providers\DatabaseServiceProvider::class,
         OfficeSuite\OfficeSuitesServiceProvider::class,
+        Barryvdh\Snappy\ServiceProvider::class,
+        OwenIt\Auditing\AuditingServiceProvider::class,
     ],
 
     /*
@@ -214,5 +216,9 @@ return [
         'Socialite' => Laravel\Socialite\Facades\Socialite::class,
         'Arr' => Illuminate\Support\Arr::class,
         'Str' => Illuminate\Support\Str::class,
+        'PDF' => Barryvdh\Snappy\Facades\SnappyPdf::class,
+        'SnappyImage' => Barryvdh\Snappy\Facades\SnappyImage::class,
     ],
+
+    'faker_locale' => 'en_IN',
 ];

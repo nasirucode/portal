@@ -115,6 +115,12 @@ class Application extends Model
                 case 'job':
                     $query->filterByJob($value);
                     break;
+                case 'graduation_year':
+                    $query->filterByYear($value);
+                    break;
+                case 'university':
+                    $query->filterByUniversity($value);
+                    break;
                 case 'name':
                     $query->filterByName($value);
                     break;
@@ -194,6 +200,20 @@ class Application extends Model
         });
     }
 
+    public function scopeFilterByUniversity($query, $id)
+    {
+        return $query->whereHas('applicant', function ($query) use ($id) {
+            $query->where('hr_university_id', $id);
+        });
+    }
+
+    public function scopeFilterByYear($query, $id)
+    {
+        return $query->whereHas('applicant', function ($query) use ($id) {
+            $query->where('graduation_year', $id);
+        });
+    }
+
     public function scopeFilterByName($query, $search)
     {
         return $query->whereHas('applicant', function ($query) use ($search) {
@@ -264,7 +284,8 @@ class Application extends Model
      */
     public function scopeRejected($query)
     {
-        return $query->where('status', config('hr.status.rejected.label'));
+        return $query->where('status', config('hr.status.rejected.label'))
+        ->orderBy('updated_at', 'DESC');
     }
 
     /**
@@ -272,17 +293,20 @@ class Application extends Model
      */
     public function scopeClosed($query)
     {
-        return $query->where('status', config('hr.status.rejected.label'));
+        return $query->where('status', config('hr.status.rejected.label'))
+        ->orderBy('updated_at', 'DESC');
     }
 
     public function scopeApproved($query)
     {
-        return $query->where('status', config('hr.status.approved.label'));
+        return $query->where('status', config('hr.status.approved.label'))
+        ->orderBy('updated_at', 'DESC');
     }
 
     public function scopeOnboarded($query)
     {
-        return $query->where('status', config('hr.status.onboarded.label'));
+        return $query->where('status', config('hr.status.onboarded.label'))
+        ->orderBy('updated_at', 'DESC');
     }
 
     /**
@@ -309,7 +333,8 @@ class Application extends Model
      */
     public function scopeOnHold($query)
     {
-        return $query->where('status', config('hr.status.on-hold.label'));
+        return $query->where('status', config('hr.status.on-hold.label'))
+        ->orderBy('updated_at', 'DESC');
     }
 
     /**
@@ -320,7 +345,8 @@ class Application extends Model
         return $query->whereIn('status', [
             config('hr.status.no-show.label'),
             config('hr.status.no-show-reminded.label'),
-        ]);
+        ])
+        ->orderBy('updated_at', 'DESC');
     }
 
     /**
@@ -328,7 +354,8 @@ class Application extends Model
      */
     public function scopeSentForApproval($query)
     {
-        return $query->where('status', config('hr.status.sent-for-approval.label'));
+        return $query->where('status', config('hr.status.sent-for-approval.label'))
+        ->orderBy('updated_at', 'DESC');
     }
 
     /**
@@ -345,6 +372,11 @@ class Application extends Model
     public function approve()
     {
         $this->update(['status' => config('hr.status.approved.label')]);
+    }
+
+    public function onHold()
+    {
+        $this->update(['status' => config('hr.status.on-hold.label')]);
     }
 
     public function onboarded()
@@ -578,5 +610,19 @@ class Application extends Model
         $params = encrypt(json_encode(['application_id' => $this->id]));
 
         return route('select-appointments', $params);
+    }
+
+    public function getMarksAttribute()
+    {
+        $applicationRound = $this->latestApplicationRound;
+        $roundId = $applicationRound ? $applicationRound->hr_round_id : null;
+
+        if ($this->evaluations->isEmpty()) {
+            return;
+        }
+
+        return $this->evaluations()->filterEvaluationsByRound($roundId)->get()->sum(function ($evaluation) {
+            return $evaluation->evaluationOption->marks;
+        });
     }
 }

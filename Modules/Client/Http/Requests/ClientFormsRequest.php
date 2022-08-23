@@ -8,13 +8,18 @@ class ClientFormsRequest extends FormRequest
 {
     private function clientDetailsValidation()
     {
-        return [
+        $rules = [
             'name' => 'required|string',
-            'status' => 'required|string',
             'is_channel_partner' => 'nullable|string',
-            'channel_partner_id' => 'nullable|string',
-            'parent_organisation_id' => 'nullable|string',
+            'channel_partner_id' => 'nullable|integer',
+            'parent_organisation_id' => 'nullable|integer',
         ];
+
+        if (request()->has('status')) {
+            $rules['status'] = 'required|string|in:inactive';
+        }
+
+        return $rules;
     }
 
     private function contactPersonsValidation()
@@ -22,13 +27,13 @@ class ClientFormsRequest extends FormRequest
         return [
             'client_contact_persons.*.name' => 'nullable|max:120',
             'client_contact_persons.*.email' => 'required|email',
-            'client_contact_persons.*.phone' => 'required|digits_between:4,10|integer',
+            'client_contact_persons.*.phone' => 'nullable|max:20',
         ];
     }
 
     private function addressValidation()
     {
-        return  [
+        return [
             'address.*.country_id' => 'required|string',
             'address.*.address' => 'required|string',
             'address.*.state' => 'nullable|string',
@@ -40,7 +45,7 @@ class ClientFormsRequest extends FormRequest
 
     private function billingDetailsValidation()
     {
-        return  [
+        return [
             'key_account_manager_id' => 'required|string',
             'service_rates' => 'nullable|string',
             'service_rate_term' => 'nullable|string',

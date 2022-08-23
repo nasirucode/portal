@@ -9,18 +9,23 @@ use Modules\HR\Entities\Employee;
 use Modules\HR\Entities\Evaluation\Parameter;
 use Modules\HR\Entities\Evaluation\ParameterOption;
 use Modules\HR\Entities\Evaluation\Segment;
+use Modules\HR\Entities\Round;
+use Modules\HR\Http\Requests\ManageEvaluationRequest;
+use Modules\HR\Http\Requests\EditEvaluationRequest;
 
 class EvaluationController extends Controller
 {
     /**
      * Display a listing of the resource.
      */
-    public function index()
+    public function index(Request $request)
     {
         $segments = Segment::all();
+        $rounds = Round::select('id', 'name')->get();
 
         return view('hr::evaluation.index', [
-            'segments' => $segments
+            'segments' => $segments,
+            'rounds' => $rounds,
         ]);
     }
 
@@ -33,17 +38,28 @@ class EvaluationController extends Controller
 
         return view('hr::evaluation.segment-parameters', [
             'segment' => $segment,
-            'parameters' => $segment->parameters()->with('options')->get(),
-            'parentParameters' => $segment->parameters()->whereNull('parent_id')->with('options')->get(),
+            'parameters' => $segment
+                ->parameters()
+                ->with('options')
+                ->get(),
+            'parentParameters' => $segment
+                ->parameters()
+                ->whereNull('parent_id')
+                ->with('options')
+                ->get(),
         ]);
     }
 
     /**
      * Display a listing of the resource.
      */
-    public function createSegment(Request $request)
+    public function createSegment(ManageEvaluationRequest $request)
     {
-        $segment = Segment::create(['name' => $request->name]);
+        $segmentId = Round::select('*')->where('name', $request->rounds)->first()->id;
+        $segment = Segment::create([
+            'name' => $request->name,
+            'round_id' => $segmentId
+        ]);
 
         return redirect(route('hr.evaluation'));
     }
@@ -51,10 +67,21 @@ class EvaluationController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function updateSegment(Request $request, $segmentID)
+    public function updateSegment(EditEvaluationRequest $request, $segmentID)
     {
         $segment = Segment::find($segmentID);
-        $segment->update(['name' => $request->name]);
+        $segment->update([
+            'name' => $request->name,
+            'round_id' => $request->round_id,
+        ]);
+
+        return redirect(route('hr.evaluation'));
+    }
+
+    public function deleteSegment(Request $request, $segmentID)
+    {
+        $segment = Segment::find($segmentID);
+        $segment->delete();
 
         return redirect(route('hr.evaluation'));
     }
@@ -63,16 +90,17 @@ class EvaluationController extends Controller
     {
         $segment = Segment::find($segmentID);
         $parameter = Parameter::create([
-                'name' => $request->name,
-                'marks' => $request->marks,
-                'segment_id' => $segment->id
+            'name' => $request->name,
+            'marks' => $request->marks,
+            'slug' => \Str::slug($request->slug),
+            'segment_id' => $segment->id,
         ]);
 
         foreach ($request->parameter_options as $parameterOption) {
             ParameterOption::create([
                 'value' => $parameterOption['label'],
                 'marks' => $parameterOption['marks'],
-                'evaluation_id' => $parameter->id
+                'evaluation_id' => $parameter->id,
             ]);
         }
 
@@ -82,7 +110,7 @@ class EvaluationController extends Controller
     public function updateSegmentParameter(Request $request, $segmentID, $parameterID)
     {
         $parameter = Parameter::find($parameterID);
-        $parameter->update(['name' => $request->name, 'marks' => $request->marks]);
+        $parameter->update(['name' => $request->name, 'marks' => $request->marks, 'slug' => \Str::slug($request->slug)]);
         $parameterNewOptions = collect([]);
 
         foreach ($request->parameter_options as $parameterOptionData) {
@@ -92,7 +120,7 @@ class EvaluationController extends Controller
                 $parameterOption->update([
                     'value' => $parameterOptionData['label'],
                     'marks' => $parameterOptionData['marks'],
-                    'evaluation_id' => $parameter->id
+                    'evaluation_id' => $parameter->id,
                 ]);
                 $parameterNewOptions->push($parameterOption);
                 continue;
@@ -101,17 +129,15 @@ class EvaluationController extends Controller
             $parameterOption = ParameterOption::create([
                 'value' => $parameterOptionData['label'],
                 'marks' => $parameterOptionData['marks'],
-                'evaluation_id' => $parameter->id
+                'evaluation_id' => $parameter->id,
             ]);
 
             $parameterNewOptions->push($parameterOption);
         }
 
-        $parameter->options
-            ->diff($parameterNewOptions)
-            ->each(function ($parameterOption) {
-                $parameterOption->delete();
-            });
+        $parameter->options->diff($parameterNewOptions)->each(function ($parameterOption) {
+            $parameterOption->delete();
+        });
 
         return redirect(route('hr.evaluation.segment-parameters', $segmentID));
     }
@@ -133,38 +159,51 @@ class EvaluationController extends Controller
 
         $segmentList = [];
 
-        foreach (self::getSegments($applicationRound->hr_application_id) as $segment) {
+        foreach (self::getSegments($applicationRound->hr_application_id, $applicationRound->round) as $segment) {
             $segmentList[] = self::getSegmentDetails($segment);
         }
 
-        $evaluationScores = self::calculateEvaluationScores($segmentList);
-
-        return view('hr.application.evaluation-form')->with([
-            'segment' => $segmentList,
-            'applicationRound' => $applicationRound,
-            'evaluationScores' => $evaluationScores,
-            'employees' => Employee::active()->orderBy('name')->get(),
-        ])->render();
+        return view('hr.application.evaluation-form')
+            ->with([
+                'segment' => $segmentList,
+                'applicationRound' => $applicationRound,
+                'employees' => Employee::active()
+                    ->orderBy('name')
+                    ->get(),
+            ])
+            ->render();
     }
 
     public function update($applicationRoundId)
     {
+        $request = request()->all();
+
         $applicationRound = ApplicationRound::find($applicationRoundId);
 
         if (array_key_exists('evaluation', request()->all())) {
             $applicationRound->updateOrCreateEvaluation(request()->all()['evaluation']);
         }
-        if (array_key_exists('evaluation_segment', request()->all())) {
-            $applicationRound->updateOrCreateEvaluationSegment(request()->all()['evaluation_segment']);
+        if (array_key_exists('evaluation_segment', $request)) {
+            $applicationRound->updateOrCreateEvaluationSegment($request['evaluation_segment']);
         }
 
-        return redirect()->back()->with('status', 'Evaluation updated successfully!');
+        return redirect()
+            ->back()
+            ->with('status', 'Evaluation updated successfully!');
     }
 
-    private function getSegments($applicationId)
+    private function getSegments($applicationId, $round)
     {
-        return Segment::whereHas('round')->orWhereNull('round_id')->with(
-            [
+        $query = null;
+        $telephonicInterviewRound = Round::select('id')->where('name', 'Telephonic Interview')->first();
+        if ($telephonicInterviewRound && $telephonicInterviewRound->id == $round->id) {
+            $query = Segment::where('round_id', $round->id);
+        } else {
+            $query = Segment::where('round_id', '!=', $telephonicInterviewRound->id);
+        }
+
+        return $query
+            ->with([
                 'round',
                 'applicationEvaluations' => function ($query) use ($applicationId) {
                     $query->where('application_id', $applicationId);
@@ -177,8 +216,8 @@ class EvaluationController extends Controller
                     $query->where('application_id', $applicationId);
                     $query->with('evaluationOption');
                 },
-            ]
-        )->get();
+            ])
+            ->get();
     }
 
     private function getSegmentGeneralInfo($segment)
@@ -207,8 +246,8 @@ class EvaluationController extends Controller
         $evaluationDetails = [];
 
         $evaluationDetails['comment'] = $evaluation->comment;
-        $evaluationDetails['option'] = $evaluation->evaluationOption->value;
-        $evaluationDetails['marks'] = $evaluation->evaluationOption->marks;
+        $evaluationDetails['option'] = $evaluation->evaluationOption ? $evaluation->evaluationOption->value : null;
+        $evaluationDetails['marks'] = $evaluation->evaluationOption ? $evaluation->evaluationOption->marks : null;
 
         return $evaluationDetails;
     }
@@ -237,6 +276,9 @@ class EvaluationController extends Controller
         $parameterDetails = self::getParameterGeneralInfo($parameter);
 
         $parameterDetails['marks'] = $parameter->marks;
+        if ($parameter->slug) {
+            $parameterDetails['slug'] = $parameter->slug;
+        }
         $parameterDetails['option_detail'] = self::getOptionsDetails($parameter->options);
 
         $parameterDetails['evaluation'] = false;
@@ -295,29 +337,5 @@ class EvaluationController extends Controller
         $segmentDetails['applicationEvaluations'] = self::getSegmentApplicationEvaluations($segment->applicationEvaluations);
 
         return $segmentDetails;
-    }
-
-    private function calculateEvaluationScores($segmentList)
-    {
-        $scores = [
-            'score' => 0,
-            'max' => 0
-        ];
-        foreach ($segmentList as $segment) {
-            $scores[$segment['round_id']][$segment['id']] = [
-                'score' => 0,
-                'max' => 0,
-            ];
-            foreach ($segment['parameters'] as $parameter) {
-                $scores[$segment['round_id']][$segment['id']]['max'] += $parameter['marks'];
-                if (isset($parameter['evaluation_detail']['marks'])) {
-                    $scores[$segment['round_id']][$segment['id']]['score'] += $parameter['evaluation_detail']['marks'];
-                }
-            }
-            $scores['score'] += $scores[$segment['round_id']][$segment['id']]['score'];
-            $scores['max'] += $scores[$segment['round_id']][$segment['id']]['max'];
-        }
-
-        return $scores;
     }
 }

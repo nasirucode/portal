@@ -6,7 +6,7 @@
     <br>
 
     <div class="d-flex justify-content-between mb-2">
-        <h4 class="mb-1 pb-1"> Invoices</h4>
+        <h4 class="mb-1 pb-1"> Monthly Tax Report</h4>
         <span>
             <a href="{{ route('invoice.tax-report-export', request()->all()) }}" class="btn btn-info text-white"> Export To Excel</a>
         </span>
@@ -21,7 +21,7 @@
     <div>
         <table class="table table-bordered table-striped">
             <thead class="thead-dark">
-                <tr>
+                <tr class="sticky-top">
                     <th></th>
                     <th>Project</th>
                     <th>Amount</th>
@@ -54,14 +54,14 @@
                     <td>
                         {{ $loop->iteration }}
                         <td>
-                            <a href="{{ route('invoice.edit', $invoice) }}">{{ $invoice->project->name }}</a>
+                            <a href="{{ route('invoice.edit', $invoice) }}">{{ optional($invoice->project)->name ?: ($invoice->client->name . ' Projects') }}</a>
                         </td>
                         <td>{{ $invoice->display_amount }}</td>
                         <td>{{ $invoice->amount_paid }}</td>
                         @if (request()->input('region') == config('invoice.region.indian'))
                             <td>{{ $invoice->invoiceAmount() }}</td>
                             <td>{{ $invoice->gst }}</td>
-                            <td>{{ number_format($invoice->tds, 2) }}</td>
+                            <td>{{ number_format((float)$invoice->tds, 2) }}</td>
                         @endif
                         @if (request()->input('region') == config('invoice.region.international'))
                             <td>{{ $invoice->bank_charges }}</td>
@@ -70,7 +70,7 @@
                         @if(request()->input('region') == '')
                             <td>{{ $invoice->invoiceAmount() }}</td>
                             <td>{{ $invoice->gst }}</td>
-                            <td>{{ number_format($invoice->tds, 2) }}</td>
+                            <td>{{ number_format((float)$invoice->tds, 2) }}</td>
                             <td>{{ $invoice->bank_charges }}</td>
                             <td>{{ $invoice->conversion_rate_diff }}</td>
                         @endif

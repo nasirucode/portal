@@ -6,6 +6,7 @@ use Modules\Client\Entities\Client;
 use Modules\Client\Contracts\ClientServiceContract;
 use Modules\Client\Http\Requests\ClientFormsRequest;
 use Modules\Client\Http\Requests\ClientRequest;
+use Modules\Client\Rules\ClientNameExist;
 
 class ClientController extends ModuleBaseController
 {
@@ -23,7 +24,7 @@ class ClientController extends ModuleBaseController
     {
         $this->authorize('viewAny', Client::class);
 
-        return view('client::index', $this->service->index());
+        return view('client::index', $this->service->index(request()->all()));
     }
 
     /**
@@ -72,9 +73,15 @@ class ClientController extends ModuleBaseController
      */
     public function update(ClientFormsRequest $request, Client $client)
     {
+        $request->merge([
+            'name' => trim(preg_replace('/\s\s+/', ' ', str_replace("\n", ' ', $request->name))),
+        ]);
+        if ($request->name != $client->name) {
+            $request->validate(['name' => new ClientNameExist()]);
+        }
         $this->authorize('update', $client);
         $data = $this->service->update($request->all(), $client);
 
-        return redirect($data['route']);
+        return redirect($data['route'])->with('success', 'Client has been created/updated successfully!');
     }
 }

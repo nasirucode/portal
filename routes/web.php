@@ -56,17 +56,6 @@ Route::middleware('auth')->group(function () {
                     'edit' => 'applications.volunteer.edit',
                 ]);
         });
-
-        Route::resource('employees', 'Employees\EmployeeController')
-            ->only(['index', 'show'])
-            ->names([
-                'index' => 'employees',
-                'show' => 'employees.show',
-        ]);
-
-        Route::get('employee/{employee}/projects/', 'Employees\EmployeeController@showProjects')->name('employees.projects');
-
-        Route::get('employee-reports', 'Employees\ReportsController@index')->name('employees.reports');
     });
 
     Route::prefix('finance')->namespace('Finance')->group(function () {
@@ -126,6 +115,8 @@ Route::middleware('auth')->group(function () {
         });
 
         Route::get('/nda-template', 'NDAAgreementController@index')->name('setting.agreement.nda');
+        Route::get('/invoice-template', 'SettingController@invoiceTemplates')->name('setting.invoice');
+        Route::post('/invoice-template', 'SettingController@updateInvoiceTemplates')->name('setting.invoice.update');
     });
 
     Route::prefix('knowledgecafe')->namespace('KnowledgeCafe')->group(function () {

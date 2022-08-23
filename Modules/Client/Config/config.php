@@ -25,6 +25,13 @@ return [
         ],
     ],
 
+    'client-contact-person-type'=>[
+        'primary-billing-contact' => 'billing-contact',
+        'general-point-of-contact' => 'general-contact',
+        'secondary-billing-contact' => 'secondary-contact',
+        'tertiary-billing-contact' => 'tertiary-contact',
+    ],
+
     'default-client-form-stage' => 'client-details',
 
     'countries' => [
@@ -45,34 +52,31 @@ return [
         ],
     ],
 
+    // Todo: Need to store these values in database
     'billing-frequency' => [
-        [
+        'net-15-days' => [
             'id' => 1,
             'name' => 'Net 15 days',
         ],
-
-        [
+        'monthly' => [
             'id' => 2,
             'name' => 'Monthly',
         ],
-
-        [
+        'quarterly' => [
             'id' => 3,
             'name' => 'Quarterly',
         ],
-
-        [
+        'yearly' => [
             'id' => 4,
             'name' => 'Yearly',
         ],
-
-        [
+        'based-on-project-terms' => [
             'id' => 5,
             'name' => 'Based on project terms',
         ],
     ],
 
-    'currency-symbols' =>[
+    'currency-symbols' => [
         [
             'rupee' => '₹'
         ],
@@ -84,5 +88,23 @@ return [
         [
             'pound' => '€'
         ],
+    ],
+
+    'service-rate-terms' => [
+        'per_hour' => [
+            'slug' => 'per_hour',
+            'label' => 'Per Hour',
+            'short-label' => '/hour'
+        ],
+        'per_resource' => [
+            'slug' => 'per_resource',
+            'label' => 'Per Resource',
+            'short-label' => '/resource'
+        ],
+        'overall' => [
+            'slug' => 'overall',
+            'label' => 'Overall',
+            'short-label' => 'overall'
+        ]
     ]
 ];

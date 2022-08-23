@@ -2,23 +2,82 @@
 
 namespace Modules\Project\Services;
 
+use Carbon\Carbon;
+use Carbon\CarbonPeriod;
 use Modules\Client\Entities\Client;
 use Modules\Project\Contracts\ProjectServiceContract;
 use Modules\Project\Entities\Project;
+use Modules\Project\Entities\ProjectContract;
 use Modules\Project\Entities\ProjectRepository;
 use Modules\User\Entities\User;
+use Illuminate\Support\Facades\Storage;
+use Modules\Project\Entities\ProjectMeta;
+use Modules\Project\Entities\ProjectTeamMember;
+use Illuminate\Database\Eloquent\Collection;
+use Modules\Project\Entities\ProjectBillingDetail;
 
 class ProjectService implements ProjectServiceContract
 {
-    public function index()
+    public function index(array $data = [])
     {
-        if (request()->get('projects') == 'all-projects') {
-            return Project::where('status', request()->input('status', 'active'))
-                ->get();
+        $filters = [
+            'status' => $data['status'] ?? 'active',
+            'name' => $data['name'] ?? null,
+        ];
+        $data['projects'] = $data['projects'] ?? 'my-projects';
+
+        $clients = null;
+
+        if ($data['projects'] == 'all-projects') {
+            $clients = Client::query()->with('projects', function ($query) use ($filters) {
+                $query->applyFilter($filters)->orderBy('name', 'asc');
+            })->whereHas('projects', function ($query) use ($filters) {
+                $query->applyFilter($filters);
+            })->orderBy('name')->paginate(config('constants.pagination_size'));
+
+            $filters['status'] = 'active';
+            $activeProjectsCount = Project::query()->applyFilter($filters)->count();
+
+            $filters['status'] = 'halted';
+            $haltedProjectsCount = Project::query()->applyFilter($filters)->count();
+
+            $filters['status'] = 'inactive';
+            $inactiveProjectsCount = Project::query()->applyFilter($filters)->count();
         } else {
-            return auth()->user()->projects()->where('status', request()->input('status', 'active'))
-                ->get();
+            $userId = auth()->user()->id;
+
+            $clients = Client::query()->with('projects', function ($query) use ($userId, $filters) {
+                $query->applyFilter($filters)->whereHas('getTeamMembers', function ($query) use ($userId) {
+                    $query->where('team_member_id', $userId);
+                });
+            })->whereHas('projects', function ($query) use ($userId, $filters) {
+                $query->applyFilter($filters)->whereHas('getTeamMembers', function ($query) use ($userId) {
+                    $query->where('team_member_id', $userId);
+                });
+            })->orderBy('name')->paginate(config('constants.pagination_size'));
+
+            $filters['status'] = 'active';
+            $activeProjectsCount = Project::query()->applyFilter($filters)->whereHas('getTeamMembers', function ($query) use ($userId) {
+                $query->where('team_member_id', $userId);
+            })->count();
+
+            $filters['status'] = 'halted';
+            $haltedProjectsCount = Project::query()->applyFilter($filters)->whereHas('getTeamMembers', function ($query) use ($userId) {
+                $query->where('team_member_id', $userId);
+            })->count();
+
+            $filters['status'] = 'inactive';
+            $inactiveProjectsCount = Project::query()->applyFilter($filters)->whereHas('getTeamMembers', function ($query) use ($userId) {
+                $query->where('team_member_id', $userId);
+            })->count();
         }
+
+        return [
+            'clients' => $clients->appends($data),
+            'activeProjectsCount' => $activeProjectsCount,
+            'inactiveProjectsCount' => $inactiveProjectsCount,
+            'haltedProjectsCount' => $haltedProjectsCount
+        ];
     }
 
     public function create()
@@ -28,23 +87,39 @@ class ProjectService implements ProjectServiceContract
 
     public function store($data)
     {
-        return Project::create([
+        $project = Project::create([
             'name' => $data['name'],
             'client_id' => $data['client_id'],
             'client_project_id' => $this->getClientProjectID($data['client_id']),
             'status' => 'active',
-            'start_date' => date('Y-m-d'),
-            'end_date' => date('Y-m-d'),
+            'start_date' => $data['start_date'] ?? null,
+            'end_date' => $data['end_date'] ?? null,
             'effort_sheet_url' => $data['effort_sheet_url'] ?? null,
+            'google_chat_webhook_url' => $data['google_chat_webhook_url'] ?? null,
             'type' => $data['project_type'],
             'total_estimated_hours' => $data['total_estimated_hours'] ?? null,
             'monthly_estimated_hours' => $data['monthly_estimated_hours'] ?? null,
         ]);
+
+        if ($data['billing_level'] ?? null) {
+            ProjectMeta::updateOrCreate(
+                [
+                    'key' => config('project.meta_keys.billing_level.key'),
+                    'project_id' => $project->id,
+                ],
+                [
+                    'value' => $data['billing_level']
+                ]
+            );
+        }
+
+        $project->client->update(['status' => 'active']);
+        $this->saveOrUpdateProjectContract($data, $project);
     }
 
     public function getClients()
     {
-        return Client::where('status', 'active')->get();
+        return Client::where('status', 'active')->orderBy('name')->get();
     }
 
     public function getTeamMembers()
@@ -83,34 +158,92 @@ class ProjectService implements ProjectServiceContract
 
             case 'project_repository':
                 return $this->updateProjectRepositories($data, $project);
+
+            case 'project_financial_details':
+                return $this->updateProjectFinancialDetails($data, $project);
         }
     }
 
     private function updateProjectDetails($data, $project)
     {
-        return $project->update([
+        $isProjectUpdated = $project->update([
             'name' => $data['name'],
             'client_id' => $data['client_id'],
             'status' => $data['status'],
             'type' => $data['project_type'],
             'total_estimated_hours' => $data['total_estimated_hours'] ?? null,
             'monthly_estimated_hours' => $data['monthly_estimated_hours'] ?? null,
-            'start_date' => date('Y-m-d'),
-            'end_date' => date('Y-m-d'),
+            'start_date' => $data['start_date'] ?? null,
+            'end_date' => $data['end_date'] ?? null,
             'effort_sheet_url' => $data['effort_sheet_url'] ?? null,
+            'google_chat_webhook_url' => $data['google_chat_webhook_url'] ?? null,
         ]);
+
+        if ($data['billing_level'] ?? null) {
+            ProjectMeta::updateOrCreate(
+                [
+                    'key' => config('project.meta_keys.billing_level.key'),
+                    'project_id' => $project->id,
+                ],
+                [
+                    'value' => $data['billing_level']
+                ]
+            );
+        }
+
+        $this->saveOrUpdateProjectContract($data, $project);
+        if ($data['status'] == 'active') {
+            $project->client->update(['status' => 'active']);
+        } else {
+            if (! $project->client->projects()->where('status', 'active')->exists()) {
+                $project->client->update(['status' => 'inactive']);
+            }
+            $project->getTeamMembers()->update(['ended_on' => now()]);
+        }
+
+        return $isProjectUpdated;
+    }
+
+    private function updateProjectFinancialDetails($data, $project)
+    {
+        ProjectBillingDetail::updateOrCreate(
+            ['project_id' => $project->id],
+            $data
+        );
     }
 
     private function updateProjectTeamMembers($data, $project)
     {
-        $projectTeamMembers = $data['project_team_member'] ?? [];
-        $teamMembers = [];
-
-        foreach ($projectTeamMembers as $projectTeamMember) {
-            $teamMembers[$projectTeamMember['team_member_id']] = ['designation' => $projectTeamMember['designation']];
+        $projectTeamMembers = $project->getTeamMembers;
+        $teamMembersData = $data['project_team_member'] ?? [];
+        foreach ($projectTeamMembers as $member) {
+            $flag = false;
+            foreach ($teamMembersData as $teamMemberData) {
+                if ($member->id == $teamMemberData['project_team_member_id']) {
+                    $flag = true;
+                    $tempArray = $teamMemberData;
+                    unset($tempArray['project_team_member_id']);
+                    $member->update($tempArray);
+                }
+            }
+            if (! $flag) {
+                $member->update(['ended_on' => Carbon::now()]);
+            }
         }
 
-        return $project->teamMembers()->sync($teamMembers);
+        foreach ($teamMembersData as $teamMemberData) {
+            if ($teamMemberData['project_team_member_id'] == null) {
+                ProjectTeamMember::create([
+                    'project_id' => $project->id,
+                    'team_member_id' => $teamMemberData['team_member_id'],
+                    'designation' => $teamMemberData['designation'],
+                    'daily_expected_effort' => $teamMemberData['daily_expected_effort'] ?? config('efforttracking.minimum_expected_hours'),
+                    'started_on' => $teamMemberData['started_on'] ?? now(),
+                    'ended_on' => $teamMemberData['ended_on'],
+                    'billing_engagement' => $teamMemberData['billing_engagement'],
+                ]);
+            }
+        }
     }
 
     private function updateProjectRepositories($data, $project)
@@ -142,5 +275,67 @@ class ProjectService implements ProjectServiceContract
         $clientProjectsCount = $clientProjectsCount + 1;
 
         return sprintf('%03s', $clientProjectsCount);
+    }
+
+    public function getWorkingDays($project)
+    {
+        $startDate = $project->client->month_start_date;
+        $endDate = $project->client->month_end_date;
+        $period = CarbonPeriod::create($startDate, $endDate);
+        $numberOfWorkingDays = 0;
+        $weekend = ['Saturday', 'Sunday'];
+        foreach ($period as $date) {
+            if (! in_array($date->format('l'), $weekend)) {
+                $numberOfWorkingDays++;
+            }
+        }
+
+        return $numberOfWorkingDays;
+    }
+
+    public function saveOrUpdateProjectContract($data, $project)
+    {
+        if ($data['contract_file'] ?? null) {
+            $file = $data['contract_file'];
+            $folder = '/contract/' . date('Y') . '/' . date('m');
+            $fileName = $file->getClientOriginalName();
+            $filePath = Storage::putFileAs($folder, $file, $fileName);
+            ProjectContract::updateOrCreate(
+                ['project_id' => $project->id],
+                ['contract_file_path' => $filePath]
+            );
+        }
+    }
+
+    public function getMailDetailsForProjectManagers()
+    {
+        $users = User::get();
+        $dataForMail = [];
+        foreach ($users as $user) {
+            $userProjects = ProjectTeamMember::where('team_member_id', $user->id)->where('designation', 'project_manager')->pluck('project_id');
+            if (empty($userProjects)) {
+                continue;
+            }
+            $projects = Project::with(['teamMembers'])->whereIn('id', $userProjects)->get();
+            $managerProjects = [];
+            foreach ($projects as $project) {
+                foreach ($project->teamMembers as $teamMember) {
+                    if ($teamMember->getOriginal('pivot_designation') != 'project_manager' && $teamMember->getOriginal('pivot_daily_expected_effort') == 0) {
+                        $managerProjects[] = $project;
+                        break;
+                    }
+                }
+            }
+            if (! empty($managerProjects)) {
+                $dataForMail[] = [
+                    'projects' => $managerProjects,
+                    'name' => $user->name,
+                    'email' =>$user->email,
+                ];
+            }
+        }
+        $projectDetails = Collection::make($dataForMail);
+
+        return $projectDetails;
     }
 }

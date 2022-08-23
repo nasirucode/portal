@@ -98,7 +98,7 @@
             </div>
         @endif
 
-        <main class="py-4">
+        <main class="py-4 mx-4">
             @yield('content')
         </main>
     </div>
@@ -108,9 +108,9 @@
     <script src="https://cdn.jsdelivr.net/gh/bbbootstrap/libraries@main/choices.min.js"></script>
     <script src="{{ asset('src/tinymce/js/tinymce/tinymce.min.js') }}"></script>
     <script src="{{ mix('js/app.js') }}"></script>
-    <script src="{{ mix('/js/hr.js') }}"></script>
 
     @yield('js_scripts')
+    @yield('vue_scripts')
 
     <script>
         @yield('inline_js')

@@ -6,7 +6,7 @@
                 @csrf
                 <div class="modal-header">
                     <h5 class="modal-title" id="createSegmentModal" v-text="selectedParameter.name"></h5>
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <button type="button" class="close" data-bs-dismiss="modal" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>
                 </div>
@@ -21,6 +21,11 @@
                         <label for="name" class="field-required">Parameter marks</label>
                         <input type="text" class="form-control" name="marks" id="marks" placeholder="Marks"
                             required="required" v-model="selectedParameter.marks">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="name" class="field-required">Slug</label>
+                        <input type="text" class="form-control" name="slug" id="slug" placeholder="Slug" v-model="selectedParameter.slug">
                     </div>
 
                     <br>

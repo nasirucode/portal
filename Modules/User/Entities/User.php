@@ -118,7 +118,7 @@ class User extends Authenticatable
 
     public function projects()
     {
-        return $this->belongsToMany(Project::class, 'project_team_members', 'team_member_id', 'project_id');
+        return $this->belongsToMany(Project::class, 'project_team_members', 'team_member_id', 'project_id')->wherePivot('ended_on', null);
     }
 
     public function meta()
@@ -142,6 +142,10 @@ class User extends Authenticatable
     {
         return $this->hasMany(ProjectTeamMember::class, 'team_member_id');
     }
+    public function activeProjectTeamMembers()
+    {
+        return $this->hasMany(ProjectTeamMember::class, 'team_member_id')->where('ended_on', null);
+    }
 
     public function getMonthTotalEffortAttribute()
     {
@@ -160,5 +164,26 @@ class User extends Authenticatable
         }
 
         return $totalEffort;
+    }
+
+    public function getFteAttribute()
+    {
+        $fte = 0;
+
+        foreach ($this->projectTeamMembers as $projectTeamMember) {
+            $fte += $projectTeamMember->fte;
+        }
+
+        return $fte;
+    }
+
+    public function activeProjects()
+    {
+        $userId = $this->id;
+        $projects = Project::whereHas('getTeamMembers', function ($query) use ($userId) {
+            return $query->where('team_member_id', $userId);
+        })->get();
+
+        return $projects;
     }
 }

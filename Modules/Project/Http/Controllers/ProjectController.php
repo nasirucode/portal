@@ -3,16 +3,23 @@
 namespace Modules\Project\Http\Controllers;
 
 use Illuminate\Routing\Controller;
-use Modules\Project\Contracts\ProjectServiceContract;
+use Modules\Client\Entities\Client;
 use Modules\Project\Entities\Project;
+use Modules\Project\Rules\ProjectNameExist;
+use Modules\Project\Entities\ProjectContract;
 use Modules\Project\Http\Requests\ProjectRequest;
+use Modules\Project\Contracts\ProjectServiceContract;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 
 class ProjectController extends Controller
 {
+    use AuthorizesRequests;
+
     protected $service;
 
     public function __construct(ProjectServiceContract $service)
     {
+        $this->authorizeResource(Project::class);
         $this->service = $service;
     }
 
@@ -21,9 +28,9 @@ class ProjectController extends Controller
      */
     public function index()
     {
-        $projects = $this->service->index();
+        $data = $this->service->index(request()->all());
 
-        return view('project::index')->with('projects', $projects);
+        return view('project::index', $data);
     }
 
     /**
@@ -45,7 +52,7 @@ class ProjectController extends Controller
         $validated = $request->validated();
         $this->service->store($validated);
 
-        return redirect(route('project.index'));
+        return redirect(route('project.index'))->with('success', 'Project has been created successfully!');
     }
 
     /**
@@ -54,8 +61,44 @@ class ProjectController extends Controller
      */
     public function show(Project $project)
     {
+        $contract = ProjectContract::where('project_id', $project->id)->first();
+        $contractFilePath = $contract ? storage_path('app/' . $contract->contract_file_path) : null;
+        $currentDate = today(config('constants.timezone.indian'));
+
+        if (now(config('constants.timezone.indian'))->format('H:i:s') < config('efforttracking.update_date_count_after_time')) {
+            $currentDate = $currentDate->subDay();
+        }
+        $daysTillToday = count($project->getWorkingDaysList($project->client->month_start_date, $currentDate));
+
         return view('project::show', [
             'project' => $project,
+            'contract' => $contract,
+            'contractFilePath' => $contractFilePath,
+            'daysTillToday' => $daysTillToday,
+        ]);
+    }
+
+    public function destroy(ProjectRequest $request, Project $project)
+    {
+        Project::updateOrCreate(
+            [
+                'reason_for_deletion' => $request['comment']
+            ]
+        );
+        $project->delete();
+
+        return redirect()->back()->with('status', 'Project deleted successfully!');
+    }
+
+    public static function showPdf(ProjectContract $contract)
+    {
+        $filePath = storage_path('app/' . $contract->contract_file_path);
+        $content = file_get_contents($filePath);
+        $contractFileName = pathinfo($contract->contract_file_path)['filename'];
+
+        return response($content)->withHeaders([
+            'content-type' => mime_content_type($filePath),
+            'contractFileName' => $contractFileName,
         ]);
     }
 
@@ -67,11 +110,12 @@ class ProjectController extends Controller
     {
         return view('project::edit', [
             'project' => $project,
-            'clients' => $this->service->getClients(),
+            'clients' => Client::all(),
             'teamMembers' => $this->service->getTeamMembers(),
             'projectTeamMembers' => $this->service->getProjectTeamMembers($project),
             'projectRepositories' => $this->service->getProjectRepositories($project),
             'designations' => $this->service->getDesignations(),
+            'workingDaysInMonth' => $this->service->getWorkingDays($project),
         ]);
     }
 
@@ -81,6 +125,13 @@ class ProjectController extends Controller
      */
     public function update(ProjectRequest $request, Project $project)
     {
+        $request->merge([
+            'name' => trim(preg_replace('/\s\s+/', ' ', str_replace("\n", ' ', $request->name))),
+        ]);
+        if ($request->name != $project->name) {
+            $request->validate(['name' => new ProjectNameExist()]);
+        }
+
         return $this->service->updateProjectData($request->all(), $project);
     }
 }

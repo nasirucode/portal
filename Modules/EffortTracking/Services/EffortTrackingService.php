@@ -4,27 +4,35 @@ namespace Modules\EffortTracking\Services;
 
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
+use Exception;
+use Illuminate\Support\Str;
+use Modules\Project\Entities\Project;
+use Modules\Project\Entities\ProjectMeta;
+use Modules\Project\Entities\ProjectTeamMemberEffort;
+use Modules\User\Entities\User;
+use Revolution\Google\Sheets\Sheets;
 
 class EffortTrackingService
 {
-    public function show($project)
+    public function show(array $data, $project)
     {
         $teamMembers = $project->getTeamMembers()->get();
-        $teamMembersEffort = [];
-        $users = [];
-        $totalEffort = 0;
-        $workingDays = $this->getWorkingDays(now()->startOfMonth(), now());
-        $startDate = now()->startOfMonth();
-        $endDate = now()->endOfMonth();
-        $totalWorkingDays = count($this->getWorkingDays($startDate, $endDate));
         $teamMembersDetails = $this->getTeamMembersDetails($teamMembers);
-        if (is_array($teamMembersDetails['teamMembersEffort'])) {
-            foreach ($teamMembersDetails['teamMembersEffort'] as $key => $teamMemberEffort) {
-                $totalTeamMemberEffort = end($teamMemberEffort)['total_effort_in_effortsheet'] ?? 0;
-                $totalEffort += $totalTeamMemberEffort;
-            }
+        $currentDate = now(config('constants.timezone.indian'));
+        if (now(config('constants.timezone.indian'))->format('H:i:s') < config('efforttracking.update_date_count_after_time')) {
+            $currentDate = now(config('constants.timezone.indian'))->subDay();
         }
-        $expectedHours = $this->getExpectedHours(count($workingDays));
+        $workingDays = $this->getWorkingDays($project->client->month_start_date, $currentDate);
+        $currentDate = now(config('constants.timezone.indian'));
+        $currentMonth = $data['month'] ?? Carbon::now()->format('F');
+        $currentYear = $data['year'] ?? Carbon::now()->format('Y');
+        $totalMonths = $this->getTotalMonthsFilterParameter($currentMonth, $currentYear);
+        $startDate = $project->client->getMonthStartDateAttribute($totalMonths);
+        $endDate = $project->client->getMonthEndDateAttribute($totalMonths);
+        $totalWorkingDays = count($this->getWorkingDays($startDate, $endDate));
+        $totalEffort = $project->getCurrentHoursForMonthAttribute($startDate, $endDate);
+        $totalWorkingDays = count($this->getworkingDays($startDate, $endDate));
+        $daysTillToday = count($project->getWorkingDaysList($project->client->month_start_date, $currentDate));
 
         return [
             'project' => $project,
@@ -35,8 +43,22 @@ class EffortTrackingService
             'totalEffort' => $totalEffort,
             'startDate' => $startDate,
             'endDate' => $endDate,
-            'currentMonth' => now()->format('F'),
+            'currentMonth' => $currentMonth,
+            'daysTillToday' => $daysTillToday,
+            'totalMonths' => $totalMonths,
+            'currentYear' => $currentYear,
         ];
+    }
+
+    public function getTotalMonthsFilterParameter($currentMonth, $currentYear)
+    {
+        $Month = intval(date('m', strtotime($currentMonth)));
+        $thisMonth = intval(Carbon::now()->format('m'));
+        $monthsDifference = ($thisMonth - $Month);
+        $totalYears = (Carbon::now()->format('Y') - $currentYear);
+        $totalMonths = $monthsDifference + ($totalYears * 12);
+
+        return $totalMonths;
     }
 
     /**
@@ -47,17 +69,22 @@ class EffortTrackingService
      */
     public function getFTE($currentHours, $expectedHours)
     {
+        if ($expectedHours == 0) {
+            return 0;
+        }
+
         return round($currentHours / $expectedHours, 2);
     }
 
     /**
      * Get expected hours.
      * @param  int $numberOfDays Number of days.
+     * @param float $expectedDailyHours Expected daily hours.
      * @return int|float         Expected hours.
      */
-    public function getExpectedHours($numberOfDays)
+    public function getExpectedHours($expectedDailyHours, $numberOfDays)
     {
-        return config('efforttracking.minimum_expected_hours') * $numberOfDays;
+        return $expectedDailyHours * $numberOfDays;
     }
 
     /**
@@ -89,11 +116,25 @@ class EffortTrackingService
     {
         $teamMembersEffort = [];
         $users = [];
-        $startDate = now()->startOfMonth()->toDateString();
-        $endDate = now()->endOfMonth()->toDateString();
+        $currentDate = now(config('constants.timezone.indian'));
+        if (now(config('constants.timezone.indian'))->format('H:i:s') < config('efforttracking.update_date_count_after_time')) {
+            $currentDate = now(config('constants.timezone.indian'))->subDay();
+        }
+        if (isset($teamMembers[0])) {
+            $startDate = $teamMembers[0]->project->client->month_start_date;
+            $endDate = $teamMembers[0]->project->client->month_end_date;
+        } else {
+            $startDate = $currentDate->startOfMonth()->toDateString();
+            $endDate = $currentDate->endOfMonth()->toDateString();
+        }
         foreach ($teamMembers as $teamMember) {
-            $userDetails = $teamMember->getUserDetails;
+            $userDetails = $teamMember->user;
             $efforts = $teamMember->projectTeamMemberEffort()->get();
+
+            if (! $userDetails) {
+                continue;
+            }
+
             if ($efforts->isNotEmpty()) {
                 foreach ($efforts as $effort) {
                     $effortAddedOn = new Carbon($effort->added_on);
@@ -105,13 +146,16 @@ class EffortTrackingService
                     }
                 }
             }
-            $total_effort_in_effortsheet = $efforts->isNotEmpty() ? end($teamMembersEffort[$userDetails->id])['total_effort_in_effortsheet'] : 0;
+
+            $teamMembersEffortUserDetails = $efforts->isNotEmpty() ? end($teamMembersEffort[$userDetails->id]) : [];
+            $totalEffortInEffortsheet = array_key_exists('total_effort_in_effortsheet', $teamMembersEffortUserDetails) ? $teamMembersEffortUserDetails['total_effort_in_effortsheet'] : 0;
+            $expectedEffort = $this->getExpectedHours($teamMember->daily_expected_effort, count($this->getWorkingDays($teamMember->project->client->month_start_date, $currentDate)));
             $users[] = [
                 'id' => $userDetails->id,
                 'name' => $userDetails->name,
-                'actual_effort' => $total_effort_in_effortsheet,
-                'expected_effort' => $this->getExpectedHours(count($this->getWorkingDays(now()->startOfMonth(), now()))),
-                'FTE' => $this->getFTE($total_effort_in_effortsheet, $this->getExpectedHours(count($this->getWorkingDays(now()->startOfMonth(), now())))),
+                'actual_effort' => $totalEffortInEffortsheet,
+                'expected_effort' => $expectedEffort,
+                'FTE' => $this->getFTE($totalEffortInEffortsheet, $expectedEffort),
             ];
         }
 
@@ -119,5 +163,183 @@ class EffortTrackingService
             'teamMembersEffort' => empty($teamMembersEffort) ? 0 : $teamMembersEffort,
             'users' => $users,
         ];
+    }
+
+    public function getEffortForProject($project)
+    {
+        $users = User::with('projectTeamMembers');
+        $sheetColumnsName = config('efforttracking.columns_name');
+        try {
+            $effortSheetUrl = $project->effort_sheet_url ?: $project->client->effort_sheet_url;
+
+            if (! $effortSheetUrl) {
+                return false;
+            }
+
+            $correctedEffortsheetUrl = [];
+
+            $isSyntaxMatching = preg_match('/.*[^-\w]([-\w]{25,})[^-\w]?.*/', $effortSheetUrl, $correctedEffortsheetUrl);
+
+            if (! $isSyntaxMatching) {
+                return false;
+            }
+
+            $sheetId = $correctedEffortsheetUrl[1];
+            $sheets = new Sheets();
+            $projectMembersCount = $project->teamMembers()->count();
+            $lastColumn = config('efforttracking.default_last_column_in_effort_sheet');
+            $columnIndex = 5;
+            $projectsInSheet = [];
+
+            try {
+                while (true) {
+                    $range = 'C1:' . ++$lastColumn . '1';
+                    $sheet = $sheets->spreadsheet($sheetId)
+                        ->range($range)
+                        ->get();
+
+                    if (isset($sheet[0]) && count($sheet[0]) == ++$columnIndex) {
+                        $subProjectName = $sheet[0][count($sheet[0]) - 1];
+                        $subProject = Project::where(['name' => $subProjectName, 'status' => 'active'])->first();
+                        if ($subProject) {
+                            $projectsInSheet[] = [
+                                'id' => $subProject->id,
+                                'name' => $subProjectName,
+                                'sheetIndex' => $columnIndex - 1,
+                            ];
+                        }
+                        continue;
+                    }
+
+                    $lastColumn = chr(ord((string) $lastColumn) - 1);
+                    $columnIndex--;
+                    break;
+                }
+            } catch (Exception $e) {
+                return false;
+            }
+
+            $range = config('efforttracking.default_start_column_in_effort_sheet') . '2:' . $lastColumn . ($projectMembersCount + 1); // this will depend on the number of people on the project
+            $sheetIndexForTeamMemberName = $this->getColumnIndex($sheetColumnsName['team_member_name'], $sheet[0]);
+            $sheetIndexForTotalBillableEffort = $this->getColumnIndex($sheetColumnsName['billable_effort'], $sheet[0]);
+            $sheetIndexForStartDate = $this->getColumnIndex($sheetColumnsName['start_date'], $sheet[0]);
+            $sheetIndexForEndDate = $this->getColumnIndex($sheetColumnsName['end_date'], $sheet[0]);
+
+            if ($sheetIndexForTeamMemberName === false || $sheetIndexForTotalBillableEffort === false || $sheetIndexForStartDate === false || $sheetIndexForEndDate === false) {
+                return false;
+            }
+
+            if (count($projectsInSheet) == 0) {
+                $projectsInSheet[] = [
+                    'id' => $project->id,
+                    'name' => $project->name,
+                    'sheetIndex' => $sheetIndexForTotalBillableEffort,
+                ];
+            }
+
+            try {
+                $usersData = $sheets->spreadsheet($sheetId)
+                    ->range($range)
+                    ->get();
+            } catch (Exception $e) {
+                return false;
+            }
+
+            foreach ($usersData as $sheetUser) {
+                try {
+                    $userNickname = $sheetUser[$sheetIndexForTeamMemberName];
+                    $portalUsers = clone $users;
+                    $portalUser = $portalUsers->where('nickname', $userNickname)->first();
+
+                    if (! $portalUser) {
+                        continue;
+                    }
+
+                    $billingStartDate = Carbon::create($sheetUser[$sheetIndexForStartDate]);
+                    $billingEndDate = Carbon::create($sheetUser[$sheetIndexForEndDate]);
+                    $currentDate = now(config('constants.timezone.indian'))->today();
+
+                    if ($currentDate < $billingStartDate || $currentDate > $billingEndDate) {
+                        continue;
+                    }
+
+                    $effortData = [
+                        'portal_user' => $portalUser,
+                        'sheet_user' => $sheetUser,
+                        'project' => $project,
+                        'billing_start_date' => $billingStartDate,
+                        'billing_end_date' => $billingEndDate,
+                        'sheet_index_for_billable_effort' => $sheetIndexForTotalBillableEffort,
+                    ];
+
+                    foreach ($projectsInSheet as $sheetProject) {
+                        try {
+                            $effortData['sheet_project'] = $sheetProject;
+                            $this->updateEffort($effortData);
+                            ProjectMeta::updateOrCreate(
+                                [
+                                    'key' => config('project.meta_keys.last_updated_at.key'),
+                                    'project_id' => $project->id,
+                                ],
+                                [
+                                    'value' => now(config('constants.timezone.indian')),
+                                ]
+                            );
+                        } catch (Exception $e) {
+                            continue;
+                        }
+                    }
+                } catch (Exception $e) {
+                    continue;
+                }
+            }
+        } catch (Exception $e) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public function getColumnIndex($columnName, $sheetColumns)
+    {
+        foreach ($sheetColumns as $columnIndex => $sheetColumn) {
+            if (Str::lower($sheetColumn) == $columnName) {
+                return $columnIndex;
+            }
+        }
+
+        return false;
+    }
+
+    public function updateEffort(array $effortData)
+    {
+        $currentDate = now(config('constants.timezone.indian'))->today();
+        $projectTeamMember = $effortData['portal_user']->projectTeamMembers()->active()->where('project_id', $effortData['sheet_project']['id'])->first();
+
+        if (! $projectTeamMember) {
+            return;
+        }
+        $latestProjectTeamMemberEffort = $projectTeamMember->projectTeamMemberEffort()
+            ->where('added_on', '<', $currentDate)
+            ->orderBy('added_on', 'DESC')->first();
+
+        $billableEffort = $effortData['sheet_user'][$effortData['sheet_project']['sheetIndex']];
+
+        if ($latestProjectTeamMemberEffort) {
+            $previousEffortDate = Carbon::parse($latestProjectTeamMemberEffort->added_on);
+            if ($previousEffortDate >= $effortData['billing_start_date'] && $previousEffortDate <= $effortData['billing_end_date']) {
+                $billableEffort -= $latestProjectTeamMemberEffort->total_effort_in_effortsheet;
+            }
+        }
+        ProjectTeamMemberEffort::updateOrCreate(
+            [
+                'project_team_member_id' => $projectTeamMember->id,
+                'added_on' => $currentDate,
+            ],
+            [
+                'actual_effort' => $billableEffort,
+                'total_effort_in_effortsheet' => $effortData['sheet_user'][$effortData['sheet_project']['sheetIndex']],
+            ]
+        );
     }
 }

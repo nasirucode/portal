@@ -2,6 +2,7 @@
 
 namespace Modules\HR\Database\Factories;
 
+use Faker\Factory as Faker;
 use Modules\HR\Entities\Job;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -21,11 +22,26 @@ class HrJobsFactory extends Factory
      */
     public function definition()
     {
+        $faker = Faker::create();
+
         return [
+            'opportunity_id' => 0,
+            'title' => $faker->jobTitle,
+            'description' => $faker->text(),
+            'type' => 'job',
             'domain' => array_rand(config('hr.opportunities.domains')),
-            'status' => array_rand(config('hr.status')),
-            'type' => config('hr.opportunities.job.type'),
-            'title' =>  config('hr.opportunities.job.title')
+            'start_date' => null,
+            'link' => null,
+            'end_date' => null,
+            'facebook_post' => null,
+            'twitter_post' => null,
+            'linkedin_post' => null,
+            'instagram_post' => null,
+            'created_at' => null,
+            'updated_at' => null,
+            'posted_by' => null,
+            'status' => 'published',
+            'deleted_at' => null,
         ];
     }
 }

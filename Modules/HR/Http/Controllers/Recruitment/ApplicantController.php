@@ -11,6 +11,9 @@ use Modules\HR\Contracts\ApplicationServiceContract;
 use Modules\HR\Entities\Applicant;
 use Modules\HR\Entities\Job;
 use Modules\HR\Http\Requests\Recruitment\ApplicantRequest;
+use Modules\HR\Entities\Application;
+use Modules\User\Entities\User;
+use Modules\HR\Events\Recruitment\ApplicantEmailVerified;
 
 class ApplicantController extends Controller
 {
@@ -22,7 +25,7 @@ class ApplicantController extends Controller
     {
         $this->service = $service;
         $this->authorizeResource(Applicant::class, null, [
-            'except' => ['store'],
+            'except' => ['store', 'show', 'create'],
         ]);
     }
 
@@ -77,5 +80,22 @@ class ApplicantController extends Controller
         return response()->json([
             'status' => $status,
         ]);
+    }
+
+    public function show($applicationId)
+    {
+        $application = Application::find($applicationId);
+        $interviewers = User::interviewers()->orderBy('name')->get();
+
+        return view('hr.application.details', ['application' => $application, 'applicant' => $application->applicant, 'applicationRound' => $application->applicationRounds, 'interviewers' => $interviewers, 'timeline' => $application->applicant->timeline(), 'applicationFormDetails' => $application->applicationMeta()->formData()->first()]);
+    }
+
+    public function applicantEmailVerification($applicantEmail, $applicationId)
+    {
+        $application = Application::find($applicationId);
+        $application->update(['is_verified' => true]);
+        event(new ApplicantEmailVerified($application));
+
+        return view('hr.application.verification')->with(['application' => $application, 'email' => decrypt($applicantEmail)]);
     }
 }

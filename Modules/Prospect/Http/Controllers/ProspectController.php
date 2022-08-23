@@ -74,7 +74,7 @@ class ProspectController extends Controller
     {
         $data = $this->service->update($request->all(), $id);
 
-        return redirect($data['route']);
+        return redirect($data['route'])->with('status', 'Prospect created/updated successfully!');
     }
 
     public function newProgressStage(Request $request)
@@ -87,5 +87,15 @@ class ProspectController extends Controller
         $prospectDocument = ProspectDocument::find($documentID);
 
         return Storage::download($prospectDocument->file_path);
+    }
+
+    /**
+     * soft delete prospect.
+     */
+    public function delete($id)
+    {
+        Prospect::find($id)->delete();
+
+        return redirect()->back();
     }
 }
